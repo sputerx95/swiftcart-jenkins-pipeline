@@ -1,0 +1,18 @@
+services:
+  jenkins:
+    build:
+      context: .
+      dockerfile: Dockerfile.jenkins
+    container_name: swiftcart-jenkins
+    ports:
+      - "8080:8080"
+      - "50000:50000"
+    volumes:
+      - jenkins_home:/var/jenkins_home
+    environment:
+      # Lets Playwright HTML reports render correctly in local Jenkins.
+      # Local demo only. Do not use this relaxed CSP setting in production Jenkins.
+      JAVA_OPTS: "-Dhudson.model.DirectoryBrowserSupport.CSP="
+
+volumes:
+  jenkins_home:

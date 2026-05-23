@@ -1,0 +1,10 @@
+workflow-aggregator
+git
+github
+htmlpublisher
+junit
+timestamper
+ws-cleanup
+pipeline-stage-view
+slack
+mailer

@@ -1,0 +1,21 @@
+{
+  "name": "swiftcart-jenkins-pipeline",
+  "version": "1.0.0",
+  "description": "Jenkins CI/CD pipeline for Playwright test automation on SwiftCart.",
+  "scripts": {
+    "test": "playwright test",
+    "test:chromium": "playwright test --project=chromium",
+    "test:firefox": "playwright test --project=firefox",
+    "test:webkit": "playwright test --project=webkit",
+    "test:headed": "playwright test --headed",
+    "report": "playwright show-report",
+    "lint": "eslint tests --ext .ts"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.27.0",
+    "@playwright/test": "1.58.2",
+    "eslint": "^9.27.0",
+    "typescript": "^5.8.3",
+    "typescript-eslint": "^8.32.1"
+  }
+}
