@@ -229,7 +229,7 @@ EOF
                             curl -s -X POST \
                               -H 'Content-type: application/json' \
                               --data "{\"text\":\"✅ Jenkins pipeline passed: ${JOB_NAME} #${BUILD_NUMBER}\\nReports: ${REPORTS_URL}\\nBuild: ${BUILD_URL}\"}" \
-                              "$SLACK_WEBHOOK_URL" >/dev/null || echo "Slack notification failed, but pipeline result remains valid"
+                              "$SLACK_WEBHOOK_URL" || echo "Slack notification failed, but pipeline result remains valid"
                         '''
                     }
                 }
@@ -248,7 +248,7 @@ EOF
                             curl -s -X POST \
                               -H 'Content-type: application/json' \
                               --data "{\"text\":\"❌ Jenkins pipeline failed: ${JOB_NAME} #${BUILD_NUMBER}\\nBuild: ${BUILD_URL}\"}" \
-                              "$SLACK_WEBHOOK_URL" >/dev/null || echo "Slack notification failed, but pipeline result remains valid"
+                              "$SLACK_WEBHOOK_URL" || echo "Slack notification failed, but pipeline result remains valid"
                         '''
                     }
                 }
