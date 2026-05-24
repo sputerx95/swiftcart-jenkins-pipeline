@@ -9,7 +9,7 @@ pipeline {
     environment {
         BASE_URL = 'https://swiftcart-sanaev-dev.lovable.app'
         CI = 'true'
-        SLACK_ENABLED = 'true'
+        SLACK_ENABLED = 'false'
     }
 
     stages {
