@@ -1,3 +1,28 @@
+def notifySlack(String text) {
+    if (env.SLACK_ENABLED != 'true') {
+        echo 'Slack notifications disabled (set SLACK_ENABLED=true to enable)'
+        return
+    }
+
+    withCredentials([string(credentialsId: 'slack-webhook-url', variable: 'SLACK_WEBHOOK_URL')]) {
+        def payload = groovy.json.JsonOutput.toJson([text: text])
+        def escapedPayload = payload.replace("'", "'\\''")
+
+        sh """
+            set +x
+            HTTP_CODE=\$(curl -s -o /tmp/slack-response.txt -w '%{http_code}' -X POST \\
+              -H 'Content-type: application/json' \\
+              --data '${escapedPayload}' \\
+              "\$SLACK_WEBHOOK_URL")
+            if [ "\$HTTP_CODE" -lt 200 ] || [ "\$HTTP_CODE" -ge 300 ]; then
+                echo "Slack notification failed (HTTP \$HTTP_CODE): \$(cat /tmp/slack-response.txt)"
+            else
+                echo "Slack notification sent (HTTP \$HTTP_CODE)"
+            fi
+        """
+    }
+}
+
 pipeline {
     agent any
 
@@ -9,7 +34,7 @@ pipeline {
     environment {
         BASE_URL = 'https://swiftcart-sanaev-dev.lovable.app'
         CI = 'true'
-        SLACK_ENABLED = 'false'
+        SLACK_ENABLED = 'true'
     }
 
     stages {
@@ -211,52 +236,31 @@ EOF
     }
 
     post {
-    success {
-    echo "Pipeline passed: ${env.JOB_NAME} #${env.BUILD_NUMBER}"
+        success {
+            echo "Pipeline passed: ${env.JOB_NAME} #${env.BUILD_NUMBER}"
 
-    script {
-        withCredentials([string(credentialsId: 'slack-webhook-url', variable: 'SLACK_WEBHOOK_URL')]) {
-            sh '''
-                set +x
+            script {
+                def reportsUrl = fileExists('reports-url.txt')
+                    ? readFile('reports-url.txt').trim()
+                    : 'GitHub Pages URL not generated yet.'
 
-                REPORTS_URL=$(cat reports-url.txt 2>/dev/null || true)
-
-                curl -s -X POST \
-                  -H 'Content-type: application/json' \
-                  --data "{\"text\":\"✅ Jenkins pipeline passed: ${JOB_NAME} #${BUILD_NUMBER}\\nReports: ${REPORTS_URL}\"}" \
-                  "$SLACK_WEBHOOK_URL" || echo "Slack notification failed, but pipeline result remains valid"
-            '''
+                notifySlack("✅ Jenkins pipeline passed: ${env.JOB_NAME} #${env.BUILD_NUMBER}\nReports: ${reportsUrl}\nBuild: ${env.BUILD_URL}")
+            }
         }
-    }
-}
 
         failure {
             echo "Pipeline failed: ${env.JOB_NAME} #${env.BUILD_NUMBER}"
 
             script {
-                if (env.SLACK_ENABLED == 'true') {
-                    withCredentials([string(credentialsId: 'slack-webhook-url', variable: 'SLACK_WEBHOOK_URL')]) {
-                        sh '''
-                            set +x
-
-                            curl -s -X POST \
-                              -H 'Content-type: application/json' \
-                              --data "{\"text\":\"❌ Jenkins pipeline failed: ${JOB_NAME} #${BUILD_NUMBER}\\nBuild: ${BUILD_URL}\"}" \
-                              "$SLACK_WEBHOOK_URL" || echo "Slack notification failed, but pipeline result remains valid"
-                        '''
-                    }
-                }
+                notifySlack("❌ Jenkins pipeline failed: ${env.JOB_NAME} #${env.BUILD_NUMBER}\nBuild: ${env.BUILD_URL}")
             }
         }
 
         cleanup {
-    cleanWs(
-        cleanWhenNotBuilt: false,
-        deleteDirs: true,
-        disableDeferredWipeout: true,
-        notFailBuild: true
-    )
-}
-        
+            cleanWs(cleanWhenNotBuilt: false,
+                    deleteDirs: true,
+                    disableDeferredWipeout: true,
+                    notFailBuild: true)
+        }
     }
 }
