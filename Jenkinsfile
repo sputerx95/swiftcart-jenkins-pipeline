@@ -1,25 +1,60 @@
+@NonCPS
+def findFailedStageName() {
+    try {
+        def execution = currentBuild?.rawBuild?.getExecution()
+        if (execution == null) {
+            return null
+        }
+
+        def failedStages = []
+        execution.getFlowGraph()?.each { node ->
+            if (node.getError() != null) {
+                def label = node.getDisplayName()
+                if (label?.trim()) {
+                    failedStages << label.trim()
+                }
+            }
+        }
+
+        def meaningful = failedStages.findAll { name ->
+            !name.contains('Post Actions') &&
+            !name.startsWith('Declarative:') &&
+            name != 'Shell' &&
+            name != 'Node'
+        }
+
+        return meaningful ? meaningful.last() : null
+    } catch (Exception ignored) {
+        return null
+    }
+}
+
+def resolveFailedStageName() {
+    def stage = findFailedStageName()
+    return stage ?: 'see Console Output (first red stage)'
+}
+
 def sendSlackPayload(Map payload) {
     if (env.SLACK_ENABLED != 'true') {
         echo 'Slack notifications disabled (set SLACK_ENABLED=true to enable)'
         return
     }
 
-    withCredentials([string(credentialsId: 'slack-webhook-url', variable: 'SLACK_WEBHOOK_URL')]) {
-        def body = groovy.json.JsonOutput.toJson(payload)
-        def escapedBody = body.replace("'", "'\\''")
+    writeFile file: 'slack-payload.json', text: groovy.json.JsonOutput.toJson(payload)
 
-        sh """
+    withCredentials([string(credentialsId: 'slack-webhook-url', variable: 'SLACK_WEBHOOK_URL')]) {
+        sh '''
             set +x
-            HTTP_CODE=\$(curl -s -o /tmp/slack-response.txt -w '%{http_code}' -X POST \\
-              -H 'Content-type: application/json' \\
-              --data '${escapedBody}' \\
-              "\$SLACK_WEBHOOK_URL")
-            if [ "\$HTTP_CODE" -lt 200 ] || [ "\$HTTP_CODE" -ge 300 ]; then
-                echo "Slack notification failed (HTTP \$HTTP_CODE): \$(cat /tmp/slack-response.txt)"
+            HTTP_CODE=$(curl -s -o /tmp/slack-response.txt -w "%{http_code}" -X POST \
+              -H "Content-type: application/json" \
+              --data @slack-payload.json \
+              "$SLACK_WEBHOOK_URL")
+            if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
+                echo "Slack notification failed (HTTP $HTTP_CODE): $(cat /tmp/slack-response.txt)"
             else
-                echo "Slack notification sent (HTTP \$HTTP_CODE)"
+                echo "Slack notification sent (HTTP $HTTP_CODE)"
             fi
-        """
+        '''
     }
 }
 
@@ -30,6 +65,12 @@ def notifySlackSummary(Map summary, String reportsUrl, boolean success) {
         .take(5)
         .collect { "• ${it}" }
         .join('\n')
+    def overall = summary.overall ?: [:]
+    def passedChecks = overall.passedChecks ?: 0
+    def totalChecks = overall.totalChecks ?: 0
+    def browsersTested = overall.browsersTested ?: 0
+    def siteUrl = summary.siteUrl ?: env.BASE_URL
+    def plainSummary = summary.plainSummary ?: 'Test summary unavailable.'
 
     def blocks = [
         [
@@ -40,15 +81,15 @@ def notifySlackSummary(Map summary, String reportsUrl, boolean success) {
             type: 'section',
             text: [
                 type: 'mrkdwn',
-                text: "*Build #${env.BUILD_NUMBER}* · ${summary.plainSummary}\n\n*What we checked:*\n${checksList}"
+                text: "*Build #${env.BUILD_NUMBER}* · ${plainSummary}\n\n*What we checked:*\n${checksList}"
             ]
         ],
         [
             type: 'section',
             fields: [
-                [type: 'mrkdwn', text: "*Passed*\n${summary.overall.passedChecks} of ${summary.overall.totalChecks}"],
-                [type: 'mrkdwn', text: "*Browsers*\n${summary.overall.browsersTested} tested"],
-                [type: 'mrkdwn', text: "*Website*\n<${summary.siteUrl}|Open SwiftCart>"]
+                [type: 'mrkdwn', text: "*Passed*\n${passedChecks} of ${totalChecks}"],
+                [type: 'mrkdwn', text: "*Browsers*\n${browsersTested} tested"],
+                [type: 'mrkdwn', text: "*Website*\n<${siteUrl}|Open SwiftCart>"]
             ]
         ],
         [
@@ -69,7 +110,7 @@ def notifySlackSummary(Map summary, String reportsUrl, boolean success) {
     ]
 
     sendSlackPayload([
-        text: "${statusEmoji} SwiftCart build #${env.BUILD_NUMBER}: ${summary.plainSummary}",
+        text: "${statusEmoji} SwiftCart build #${env.BUILD_NUMBER}: ${plainSummary}",
         blocks: blocks
     ])
 }
@@ -86,7 +127,7 @@ def notifySlackFailure(String reportsUrl, String failedStage = 'unknown') {
                 type: 'section',
                 text: [
                     type: 'mrkdwn',
-                    text: "*Build #${env.BUILD_NUMBER}* failed at stage: *${failedStage}*\nOpen Jenkins and check the console log for that stage."
+                    text: "*Build #${env.BUILD_NUMBER}* failed at: *${failedStage}*\nIn Jenkins, open *Console Output* and search upward for the first red error line."
                 ]
             ],
             [
@@ -314,17 +355,21 @@ pipeline {
             echo "Pipeline passed: ${env.JOB_NAME} #${env.BUILD_NUMBER}"
 
             script {
-                def reportsUrl = fileExists('reports-url.txt')
-                    ? readFile('reports-url.txt').trim()
-                    : 'GitHub Pages URL not generated yet.'
+                try {
+                    def reportsUrl = fileExists('reports-url.txt')
+                        ? readFile('reports-url.txt').trim()
+                        : 'GitHub Pages URL not generated yet.'
 
-                if (fileExists('reports/summary.json')) {
-                    def summary = new groovy.json.JsonSlurper().parseText(readFile('reports/summary.json'))
-                    notifySlackSummary(summary, reportsUrl, true)
-                } else {
-                    sendSlackPayload([
-                        text: "✅ Jenkins pipeline passed: ${env.JOB_NAME} #${env.BUILD_NUMBER}\nReports: ${reportsUrl}"
-                    ])
+                    if (fileExists('reports/summary.json')) {
+                        def summary = new groovy.json.JsonSlurper().parseText(readFile('reports/summary.json'))
+                        notifySlackSummary(summary, reportsUrl, true)
+                    } else {
+                        sendSlackPayload([
+                            text: "✅ Jenkins pipeline passed: ${env.JOB_NAME} #${env.BUILD_NUMBER}\nReports: ${reportsUrl}"
+                        ])
+                    }
+                } catch (Exception e) {
+                    echo "WARN: Slack success notification failed: ${e.message}"
                 }
             }
         }
@@ -333,11 +378,15 @@ pipeline {
             echo "Pipeline failed: ${env.JOB_NAME} #${env.BUILD_NUMBER}"
 
             script {
-                def reportsUrl = fileExists('reports-url.txt')
-                    ? readFile('reports-url.txt').trim()
-                    : "${env.BUILD_URL}"
+                try {
+                    def reportsUrl = fileExists('reports-url.txt')
+                        ? readFile('reports-url.txt').trim()
+                        : "${env.BUILD_URL}"
 
-                notifySlackFailure(reportsUrl, env.STAGE_NAME ?: 'unknown')
+                    notifySlackFailure(reportsUrl, resolveFailedStageName())
+                } catch (Exception e) {
+                    echo "WARN: Slack failure notification failed: ${e.message}"
+                }
             }
         }
 
