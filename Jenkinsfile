@@ -211,30 +211,24 @@ EOF
     }
 
     post {
-        success {
-            echo "Pipeline passed: ${env.JOB_NAME} #${env.BUILD_NUMBER}"
+    success {
+    echo "Pipeline passed: ${env.JOB_NAME} #${env.BUILD_NUMBER}"
 
-            script {
-                if (env.SLACK_ENABLED == 'true') {
-                    withCredentials([string(credentialsId: 'slack-webhook-url', variable: 'SLACK_WEBHOOK_URL')]) {
-                        sh '''
-                            set +x
+    script {
+        withCredentials([string(credentialsId: 'slack-webhook-url', variable: 'SLACK_WEBHOOK_URL')]) {
+            sh '''
+                set +x
 
-                            REPORTS_URL="$(cat reports-url.txt 2>/dev/null || true)"
+                REPORTS_URL=$(cat reports-url.txt 2>/dev/null || true)
 
-                            if [ -z "$REPORTS_URL" ]; then
-                                REPORTS_URL="GitHub Pages URL not generated yet."
-                            fi
-
-                            curl -s -X POST \
-                              -H 'Content-type: application/json' \
-                              --data "{\"text\":\"✅ Jenkins pipeline passed: ${JOB_NAME} #${BUILD_NUMBER}\\nReports: ${REPORTS_URL}\\nBuild: ${BUILD_URL}\"}" \
-                              "$SLACK_WEBHOOK_URL" || echo "Slack notification failed, but pipeline result remains valid"
-                        '''
-                    }
-                }
-            }
+                curl -s -X POST \
+                  -H 'Content-type: application/json' \
+                  --data "{\"text\":\"✅ Jenkins pipeline passed: ${JOB_NAME} #${BUILD_NUMBER}\\nReports: ${REPORTS_URL}\"}" \
+                  "$SLACK_WEBHOOK_URL" || echo "Slack notification failed, but pipeline result remains valid"
+            '''
         }
+    }
+}
 
         failure {
             echo "Pipeline failed: ${env.JOB_NAME} #${env.BUILD_NUMBER}"
@@ -255,11 +249,14 @@ EOF
             }
         }
 
-        always {
-            cleanWs(cleanWhenNotBuilt: false,
-                    deleteDirs: true,
-                    disableDeferredWipeout: true,
-                    notFailBuild: true)
-        }
+        cleanup {
+    cleanWs(
+        cleanWhenNotBuilt: false,
+        deleteDirs: true,
+        disableDeferredWipeout: true,
+        notFailBuild: true
+    )
+}
+        
     }
 }
