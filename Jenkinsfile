@@ -74,7 +74,7 @@ def notifySlackSummary(Map summary, String reportsUrl, boolean success) {
     ])
 }
 
-def notifySlackFailure(String reportsUrl) {
+def notifySlackFailure(String reportsUrl, String failedStage = 'unknown') {
     sendSlackPayload([
         text: "❌ SwiftCart build #${env.BUILD_NUMBER} failed in Jenkins.",
         blocks: [
@@ -86,7 +86,7 @@ def notifySlackFailure(String reportsUrl) {
                 type: 'section',
                 text: [
                     type: 'mrkdwn',
-                    text: "*Build #${env.BUILD_NUMBER}* did not finish successfully.\nAsk the engineering team to review the Jenkins logs."
+                    text: "*Build #${env.BUILD_NUMBER}* failed at stage: *${failedStage}*\nOpen Jenkins and check the console log for that stage."
                 ]
             ],
             [
@@ -180,7 +180,7 @@ pipeline {
         stage('Generate Summary Report') {
             steps {
                 sh 'node scripts/generate-summary.mjs'
-                archiveArtifacts artifacts: 'reports/summary.html, reports/summary.json',
+                archiveArtifacts artifacts: 'reports/summary.*',
                                  allowEmptyArchive: true,
                                  fingerprint: true
             }
@@ -260,9 +260,27 @@ pipeline {
 
                         mkdir -p gh-pages/chromium gh-pages/firefox gh-pages/webkit
 
-                        cp -R playwright-report/chromium/* gh-pages/chromium/
-                        cp -R playwright-report/firefox/* gh-pages/firefox/
-                        cp -R playwright-report/webkit/* gh-pages/webkit/
+                        copy_report_dir() {
+                            src="$1"
+                            dest="$2"
+                            mkdir -p "$dest"
+                            if [ -d "$src" ] && [ -n "$(ls -A "$src" 2>/dev/null)" ]; then
+                                cp -R "$src/." "$dest/"
+                            else
+                                echo "No Playwright HTML files in $src (skipped copy)."
+                            fi
+                        }
+
+                        copy_report_dir playwright-report/chromium gh-pages/chromium
+                        copy_report_dir playwright-report/firefox gh-pages/firefox
+                        copy_report_dir playwright-report/webkit gh-pages/webkit
+
+                        node scripts/generate-summary.mjs
+
+                        if [ ! -f reports/summary.html ]; then
+                            echo "ERROR: reports/summary.html was not created."
+                            exit 1
+                        fi
 
                         cp reports/summary.html gh-pages/index.html
 
@@ -319,7 +337,7 @@ pipeline {
                     ? readFile('reports-url.txt').trim()
                     : "${env.BUILD_URL}"
 
-                notifySlackFailure(reportsUrl)
+                notifySlackFailure(reportsUrl, env.STAGE_NAME ?: 'unknown')
             }
         }
 
