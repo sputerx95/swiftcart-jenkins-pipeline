@@ -268,15 +268,18 @@ pipeline {
             echo "Pipeline passed: ${env.JOB_NAME} #${env.BUILD_NUMBER}"
 
             script {
-                def reportsUrl = fileExists('reports-url.txt')
-                    ? readFile('reports-url.txt').trim()
-                    : 'GitHub Pages URL not generated yet.'
+                // Slack must never flip a green build to red (tests/report already succeeded).
+                catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
+                    def reportsUrl = fileExists('reports-url.txt')
+                        ? readFile('reports-url.txt').trim()
+                        : 'GitHub Pages URL not generated yet.'
 
-                if (fileExists('reports/summary.json')) {
-                    def summary = new groovy.json.JsonSlurper().parseText(readFile('reports/summary.json'))
-                    notifySlackSummary(summary, reportsUrl)
-                } else {
-                    sendSlackText("✅ Jenkins pipeline passed: ${env.JOB_NAME} #${env.BUILD_NUMBER}\nReports: ${reportsUrl}\nBuild: ${env.BUILD_URL}")
+                    if (fileExists('reports/summary.json')) {
+                        def summary = new groovy.json.JsonSlurper().parseText(readFile('reports/summary.json'))
+                        notifySlackSummary(summary, reportsUrl)
+                    } else {
+                        sendSlackText("✅ Jenkins pipeline passed: ${env.JOB_NAME} #${env.BUILD_NUMBER}\nReports: ${reportsUrl}\nBuild: ${env.BUILD_URL}")
+                    }
                 }
             }
         }
@@ -285,11 +288,13 @@ pipeline {
             echo "Pipeline failed: ${env.JOB_NAME} #${env.BUILD_NUMBER}"
 
             script {
-                def reportsUrl = fileExists('reports-url.txt')
-                    ? readFile('reports-url.txt').trim()
-                    : "${env.BUILD_URL}"
+                catchError(buildResult: null, stageResult: 'FAILURE') {
+                    def reportsUrl = fileExists('reports-url.txt')
+                        ? readFile('reports-url.txt').trim()
+                        : "${env.BUILD_URL}"
 
-                notifySlackFailure(reportsUrl)
+                    notifySlackFailure(reportsUrl)
+                }
             }
         }
 
