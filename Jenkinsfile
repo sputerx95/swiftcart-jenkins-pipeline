@@ -1,67 +1,3 @@
-def sendSlackText(String text) {
-    if (env.SLACK_ENABLED != 'true') {
-        echo 'Slack notifications disabled (set SLACK_ENABLED=true to enable)'
-        return
-    }
-
-    def payload = groovy.json.JsonOutput.toJson([text: text])
-    writeFile file: 'slack-payload.json', text: payload
-
-    withCredentials([string(credentialsId: 'slack-webhook-url', variable: 'SLACK_WEBHOOK_URL')]) {
-        sh '''
-            set +x
-            HTTP_CODE=$(curl -s -o /tmp/slack-response.txt -w "%{http_code}" -X POST \
-              -H "Content-type: application/json" \
-              --data @slack-payload.json \
-              "$SLACK_WEBHOOK_URL")
-            if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
-                echo "ERROR: Slack notification failed (HTTP $HTTP_CODE)"
-                cat /tmp/slack-response.txt
-            else
-                echo "Slack notification sent (HTTP $HTTP_CODE)"
-            fi
-        '''
-    }
-}
-
-def notifySlackSummary(Map summary, String reportsUrl) {
-    def checksList = (summary.whatWeChecked ?: [])
-        .take(5)
-        .collect { "• ${it}" }
-        .join('\n')
-    def overall = summary.overall ?: [:]
-    def passedChecks = overall.passedChecks ?: 0
-    def totalChecks = overall.totalChecks ?: 0
-    def browsersTested = overall.browsersTested ?: 0
-    def siteUrl = summary.siteUrl ?: env.BASE_URL
-    def plainSummary = summary.plainSummary ?: 'Test summary unavailable.'
-
-    def text = """✅ *SwiftCart quality check passed* — build #${env.BUILD_NUMBER}
-${plainSummary}
-
-*What we checked:*
-${checksList}
-
-*Passed:* ${passedChecks} / ${totalChecks} · *Browsers tested:* ${browsersTested}
-
-*Simple report:* ${reportsUrl}
-*Jenkins build:* ${env.BUILD_URL}
-*Website:* ${siteUrl}"""
-
-    sendSlackText(text)
-}
-
-def notifySlackFailure(String reportsUrl) {
-    def text = """❌ *SwiftCart pipeline failed* — build #${env.BUILD_NUMBER}
-
-Open Jenkins *Console Output* and find the first red error (ignore "Declarative: Post Actions").
-
-*Jenkins build:* ${env.BUILD_URL}
-*Last report page:* ${reportsUrl}"""
-
-    sendSlackText(text)
-}
-
 pipeline {
     agent any
 
@@ -266,34 +202,32 @@ pipeline {
     post {
         success {
             echo "Pipeline passed: ${env.JOB_NAME} #${env.BUILD_NUMBER}"
-
-            script {
-                // Slack must never flip a green build to red (tests/report already succeeded).
-                catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
-                    def reportsUrl = fileExists('reports-url.txt')
-                        ? readFile('reports-url.txt').trim()
-                        : 'GitHub Pages URL not generated yet.'
-
-                    if (fileExists('reports/summary.json')) {
-                        def summary = new groovy.json.JsonSlurper().parseText(readFile('reports/summary.json'))
-                        notifySlackSummary(summary, reportsUrl)
-                    } else {
-                        sendSlackText("✅ Jenkins pipeline passed: ${env.JOB_NAME} #${env.BUILD_NUMBER}\nReports: ${reportsUrl}\nBuild: ${env.BUILD_URL}")
-                    }
-                }
-            }
         }
 
         failure {
             echo "Pipeline failed: ${env.JOB_NAME} #${env.BUILD_NUMBER}"
+        }
 
+        always {
             script {
-                catchError(buildResult: null, stageResult: 'FAILURE') {
-                    def reportsUrl = fileExists('reports-url.txt')
-                        ? readFile('reports-url.txt').trim()
-                        : "${env.BUILD_URL}"
+                if (env.SLACK_ENABLED != 'true') {
+                    echo 'Slack notifications disabled (set SLACK_ENABLED=true to enable)'
+                    return
+                }
 
-                    notifySlackFailure(reportsUrl)
+                def pipelineResult = currentBuild.currentResult == 'SUCCESS' ? 'success' : 'failure'
+
+                catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
+                    withCredentials([string(credentialsId: 'slack-webhook-url', variable: 'SLACK_WEBHOOK_URL')]) {
+                        sh """
+                            set +x
+                            export PIPELINE_RESULT=${pipelineResult}
+                            export BUILD_NUMBER=${env.BUILD_NUMBER}
+                            export BUILD_URL=${env.BUILD_URL}
+                            export BASE_URL=${env.BASE_URL}
+                            node scripts/send-slack.mjs
+                        """
+                    }
                 }
             }
         }
