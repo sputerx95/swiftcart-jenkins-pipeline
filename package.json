@@ -10,6 +10,7 @@
     "test:headed": "playwright test --headed",
     "report": "playwright show-report",
     "generate-summary": "node scripts/generate-summary.mjs",
+    "send-slack": "node scripts/send-slack.mjs",
     "lint": "eslint tests --ext .ts"
   },
   "devDependencies": {
