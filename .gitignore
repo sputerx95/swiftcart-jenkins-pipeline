@@ -1,6 +1,7 @@
 node_modules/
 playwright-report/
 test-results/
+reports/
 jenkins_home/
 .DS_Store
 .env

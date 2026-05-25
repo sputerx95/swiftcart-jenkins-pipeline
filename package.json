@@ -9,6 +9,7 @@
     "test:webkit": "playwright test --project=webkit",
     "test:headed": "playwright test --headed",
     "report": "playwright show-report",
+    "generate-summary": "node scripts/generate-summary.mjs",
     "lint": "eslint tests --ext .ts"
   },
   "devDependencies": {

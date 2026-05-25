@@ -1,18 +1,18 @@
-def notifySlack(String text) {
+def sendSlackPayload(Map payload) {
     if (env.SLACK_ENABLED != 'true') {
         echo 'Slack notifications disabled (set SLACK_ENABLED=true to enable)'
         return
     }
 
     withCredentials([string(credentialsId: 'slack-webhook-url', variable: 'SLACK_WEBHOOK_URL')]) {
-        def payload = groovy.json.JsonOutput.toJson([text: text])
-        def escapedPayload = payload.replace("'", "'\\''")
+        def body = groovy.json.JsonOutput.toJson(payload)
+        def escapedBody = body.replace("'", "'\\''")
 
         sh """
             set +x
             HTTP_CODE=\$(curl -s -o /tmp/slack-response.txt -w '%{http_code}' -X POST \\
               -H 'Content-type: application/json' \\
-              --data '${escapedPayload}' \\
+              --data '${escapedBody}' \\
               "\$SLACK_WEBHOOK_URL")
             if [ "\$HTTP_CODE" -lt 200 ] || [ "\$HTTP_CODE" -ge 300 ]; then
                 echo "Slack notification failed (HTTP \$HTTP_CODE): \$(cat /tmp/slack-response.txt)"
@@ -21,6 +21,91 @@ def notifySlack(String text) {
             fi
         """
     }
+}
+
+def notifySlackSummary(Map summary, String reportsUrl, boolean success) {
+    def statusEmoji = success ? '✅' : '❌'
+    def statusTitle = success ? 'All website checks passed' : 'Website checks need attention'
+    def checksList = (summary.whatWeChecked ?: [])
+        .take(5)
+        .collect { "• ${it}" }
+        .join('\n')
+
+    def blocks = [
+        [
+            type: 'header',
+            text: [type: 'plain_text', text: "${statusEmoji} SwiftCart quality check — ${statusTitle}", emoji: true]
+        ],
+        [
+            type: 'section',
+            text: [
+                type: 'mrkdwn',
+                text: "*Build #${env.BUILD_NUMBER}* · ${summary.plainSummary}\n\n*What we checked:*\n${checksList}"
+            ]
+        ],
+        [
+            type: 'section',
+            fields: [
+                [type: 'mrkdwn', text: "*Passed*\n${summary.overall.passedChecks} of ${summary.overall.totalChecks}"],
+                [type: 'mrkdwn', text: "*Browsers*\n${summary.overall.browsersTested} tested"],
+                [type: 'mrkdwn', text: "*Website*\n<${summary.siteUrl}|Open SwiftCart>"]
+            ]
+        ],
+        [
+            type: 'actions',
+            elements: [
+                [
+                    type: 'button',
+                    text: [type: 'plain_text', text: 'View simple report', emoji: true],
+                    url: reportsUrl
+                ],
+                [
+                    type: 'button',
+                    text: [type: 'plain_text', text: 'Open Jenkins build', emoji: true],
+                    url: "${env.BUILD_URL}"
+                ]
+            ]
+        ]
+    ]
+
+    sendSlackPayload([
+        text: "${statusEmoji} SwiftCart build #${env.BUILD_NUMBER}: ${summary.plainSummary}",
+        blocks: blocks
+    ])
+}
+
+def notifySlackFailure(String reportsUrl) {
+    sendSlackPayload([
+        text: "❌ SwiftCart build #${env.BUILD_NUMBER} failed in Jenkins.",
+        blocks: [
+            [
+                type: 'header',
+                text: [type: 'plain_text', text: '❌ SwiftCart pipeline failed', emoji: true]
+            ],
+            [
+                type: 'section',
+                text: [
+                    type: 'mrkdwn',
+                    text: "*Build #${env.BUILD_NUMBER}* did not finish successfully.\nAsk the engineering team to review the Jenkins logs."
+                ]
+            ],
+            [
+                type: 'actions',
+                elements: [
+                    [
+                        type: 'button',
+                        text: [type: 'plain_text', text: 'Open Jenkins build', emoji: true],
+                        url: "${env.BUILD_URL}"
+                    ],
+                    [
+                        type: 'button',
+                        text: [type: 'plain_text', text: 'View last report page', emoji: true],
+                        url: reportsUrl
+                    ]
+                ]
+            ]
+        ]
+    ])
 }
 
 pipeline {
@@ -89,6 +174,15 @@ pipeline {
                         sh 'npm run test:webkit'
                     }
                 }
+            }
+        }
+
+        stage('Generate Summary Report') {
+            steps {
+                sh 'node scripts/generate-summary.mjs'
+                archiveArtifacts artifacts: 'reports/summary.html, reports/summary.json',
+                                 allowEmptyArchive: true,
+                                 fingerprint: true
             }
         }
 
@@ -170,47 +264,9 @@ pipeline {
                         cp -R playwright-report/firefox/* gh-pages/firefox/
                         cp -R playwright-report/webkit/* gh-pages/webkit/
 
+                        cp reports/summary.html gh-pages/index.html
+
                         touch gh-pages/.nojekyll
-
-                        cat > gh-pages/index.html <<'EOF'
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <title>SwiftCart Playwright Reports</title>
-  <style>
-    body {
-      font-family: Arial, sans-serif;
-      max-width: 850px;
-      margin: 40px auto;
-      line-height: 1.6;
-      color: #111827;
-    }
-    h1 {
-      margin-bottom: 8px;
-    }
-    p {
-      color: #4b5563;
-    }
-    a {
-      display: block;
-      margin: 14px 0;
-      font-size: 18px;
-      color: #2563eb;
-      text-decoration: none;
-    }
-  </style>
-</head>
-<body>
-  <h1>SwiftCart Playwright Test Reports</h1>
-  <p>Reports generated by Jenkins CI/CD pipeline.</p>
-
-  <a href="./chromium/index.html">Chromium Report</a>
-  <a href="./firefox/index.html">Firefox Report</a>
-  <a href="./webkit/index.html">WebKit Report</a>
-</body>
-</html>
-EOF
 
                         cd gh-pages
 
@@ -244,7 +300,14 @@ EOF
                     ? readFile('reports-url.txt').trim()
                     : 'GitHub Pages URL not generated yet.'
 
-                notifySlack("✅ Jenkins pipeline passed: ${env.JOB_NAME} #${env.BUILD_NUMBER}\nReports: ${reportsUrl}\nBuild: ${env.BUILD_URL}")
+                if (fileExists('reports/summary.json')) {
+                    def summary = new groovy.json.JsonSlurper().parseText(readFile('reports/summary.json'))
+                    notifySlackSummary(summary, reportsUrl, true)
+                } else {
+                    sendSlackPayload([
+                        text: "✅ Jenkins pipeline passed: ${env.JOB_NAME} #${env.BUILD_NUMBER}\nReports: ${reportsUrl}"
+                    ])
+                }
             }
         }
 
@@ -252,7 +315,11 @@ EOF
             echo "Pipeline failed: ${env.JOB_NAME} #${env.BUILD_NUMBER}"
 
             script {
-                notifySlack("❌ Jenkins pipeline failed: ${env.JOB_NAME} #${env.BUILD_NUMBER}\nBuild: ${env.BUILD_URL}")
+                def reportsUrl = fileExists('reports-url.txt')
+                    ? readFile('reports-url.txt').trim()
+                    : "${env.BUILD_URL}"
+
+                notifySlackFailure(reportsUrl)
             }
         }
 
