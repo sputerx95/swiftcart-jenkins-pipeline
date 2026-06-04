@@ -1,61 +1,92 @@
 # SwiftCart Jenkins Pipeline
 
-A portfolio-ready Jenkins CI/CD project that runs Playwright tests against SwiftCart, publishes HTML reports, archives test artifacts, and supports Slack notifications.
+A portfolio-ready **Jenkins CI/CD** project for Playwright test automation against [SwiftCart](https://swiftcart-sanaev-dev.lovable.app).
+
+- **CI** — checkout, lint, parallel cross-browser smoke tests, JUnit/HTML reporting inside Jenkins
+- **CD** — deploy test reports to **GitHub Pages** (live dashboard + technical Playwright HTML per browser)
+- **Notifications** — optional Slack pass/fail messages with report links
+
+> This pipeline does **not** deploy the SwiftCart application. CD here means **continuous delivery of test report artifacts** to a public GitHub Pages site after each successful run.
+
+---
+
+## Live report (after a successful build)
+
+```text
+https://sputerx95.github.io/swiftcart-jenkins-pipeline/
+```
+
+The home page is a plain-language summary for non-technical readers. Technical Playwright reports are under `/chromium`, `/firefox`, and `/webkit`.
+
+---
 
 ## What this project proves
 
 - Jenkins pipeline-as-code with `Jenkinsfile`
-- Playwright test execution in CI
-- Parallel browser testing across Chromium, Firefox, and WebKit
-- HTML report publishing in Jenkins
-- JUnit test result publishing
+- Playwright test execution in CI (Chromium, Firefox, WebKit in parallel)
+- JUnit + HTML report publishing in Jenkins
 - Build artifact archiving
-- Optional Slack notifications
+- Plain-language summary report (`scripts/generate-summary.mjs`)
+- **CD:** automated deploy of reports to GitHub Pages (`gh-pages` branch)
+- Slack notifications via incoming webhook (`scripts/send-slack.mjs`)
+
+---
 
 ## Tech stack
 
-- Jenkins LTS
-- Docker
-- Playwright
-- TypeScript
-- Node.js
-- HTML Publisher Plugin
-- JUnit reports
-- Slack plugin
+- Jenkins LTS (Docker)
+- Playwright + TypeScript + Node.js
+- HTML Publisher Plugin, JUnit Plugin
+- GitHub Pages (`gh-pages`)
+- Slack incoming webhook
+
+---
 
 ## Architecture
 
 ```text
-GitHub Repo
+GitHub (main branch + Jenkinsfile)
    |
    v
 Jenkins Pipeline
    |
-   |-- Install Dependencies
+   |-- Checkout
+   |-- Install Dependencies (npm ci)
    |-- Lint
-   |-- Parallel Playwright Tests
+   |-- Run Playwright Tests (parallel)
    |      |-- Chromium
    |      |-- Firefox
    |      |-- WebKit
    |
-   |-- Publish HTML Reports
-   |-- Archive Artifacts
-   |-- Optional Slack Notification
+   |-- Generate Summary Report
+   |-- Publish Reports (JUnit + HTML in Jenkins)
+   |
+   |-- CD: Deploy Reports to GitHub Pages  -->  live report site
+   |
+   +-- Post: Slack notification (pass/fail)
 ```
+
+---
 
 ## Local setup
 
 ### 1. Clone the repo
 
 ```bash
-git clone <your-repo-url>
+git clone https://github.com/sputerx95/swiftcart-jenkins-pipeline.git
 cd swiftcart-jenkins-pipeline
 ```
 
-### 2. Start Jenkins
+### 2. Start Jenkins (Docker required)
 
 ```bash
 docker compose up --build -d
+```
+
+First build of the Jenkins image can take 15–30 minutes (Playwright browsers + plugins). Later starts are fast:
+
+```bash
+docker compose up -d
 ```
 
 Open Jenkins:
@@ -64,61 +95,107 @@ Open Jenkins:
 http://localhost:8080
 ```
 
-### 3. Get the initial Jenkins admin password
+### 3. Initial Jenkins admin password (first run only)
 
 ```bash
 docker exec swiftcart-jenkins cat /var/jenkins_home/secrets/initialAdminPassword
 ```
 
-### 4. Create a Jenkins Pipeline job
+### 4. Create the pipeline job
 
-1. Click **New Item**
-2. Name it `swiftcart-playwright-pipeline`
-3. Choose **Pipeline**
-4. Under **Pipeline**, choose **Pipeline script from SCM**
-5. SCM: **Git**
-6. Repository URL: your GitHub repo URL
-7. Branch: `main`
-8. Script Path: `Jenkinsfile`
-9. Save
-10. Click **Build Now**
+1. **New Item** → name: `swiftcart-playwright-pipeline` → **Pipeline** → OK
+2. **Pipeline** tab (left sidebar):
+   - **Definition:** Pipeline script from SCM
+   - **SCM:** Git
+   - **Repository URL:** `https://github.com/sputerx95/swiftcart-jenkins-pipeline.git`
+   - **Branch:** `*/main`
+   - **Script Path:** `Jenkinsfile`
+3. **Save** → **Build Now**
 
-## Run tests locally without Jenkins
+### 5. Jenkins credentials (required for full CI/CD)
+
+**Manage Jenkins → Credentials → System → Global credentials → Add Credentials**
+
+| Credential ID | Kind | Purpose |
+|---------------|------|---------|
+| `github-pages-token` | Username with password | GitHub username + **Personal Access Token** (`repo` scope) to push `gh-pages` |
+| `slack-webhook-url` | Secret text | Slack incoming webhook URL |
+
+Tests and lint run without credentials. **GitHub Pages deploy** and **Slack** fail until these are configured.
+
+---
+
+## Run tests locally (without Jenkins)
 
 ```bash
 npm ci
 npx playwright install
-npm test
+npm test                 # all browsers
+npm run test:chromium    # single browser
+npm run generate-summary
 ```
 
-## Jenkins reports
+---
 
-After the build finishes, Jenkins will show:
+## Reports
+
+### Inside Jenkins (after each build)
 
 - JUnit test results
 - Archived Playwright artifacts
-- Chromium Playwright Report
-- Firefox Playwright Report
-- WebKit Playwright Report
+- Chromium / Firefox / WebKit Playwright HTML reports (HTML Publisher plugin)
 
-## Slack notification
+### GitHub Pages (CD — after successful deploy stage)
 
-Slack is disabled by default.
+- **Summary dashboard** — `index.html` (plain English, browser cards, pass/fail counts)
+- **Technical reports** — `/chromium`, `/firefox`, `/webkit`
 
-To enable it:
+---
 
-1. Configure the Jenkins Slack plugin.
-2. Add the Slack credential/workspace settings in Jenkins.
-3. Change this in the `Jenkinsfile`:
+## Slack notifications
+
+Enabled by default in the `Jenkinsfile` (`SLACK_ENABLED = 'true'`).
+
+To disable, set in `Jenkinsfile`:
 
 ```groovy
-SLACK_ENABLED = 'true'
+SLACK_ENABLED = 'false'
 ```
 
-## Interview explanation
+Requires Jenkins credential **`slack-webhook-url`**. Messages are sent from `scripts/send-slack.mjs` in the post-build `always` block. Slack failures do not fail the build.
 
-> I built a Jenkins CI/CD pipeline for a Playwright automation suite. The pipeline checks out the code, installs dependencies, runs linting, executes tests in parallel across Chromium, Firefox, and WebKit, publishes HTML reports, archives artifacts, and has optional Slack notifications for build status. This gave me hands-on experience with Jenkins pipeline-as-code, CI reporting, test artifacts, and cross-browser automation in an enterprise-style workflow.
+---
+
+## Project layout
+
+```text
+swiftcart-jenkins-pipeline/
+├── Jenkinsfile                 # Pipeline definition (CI + CD + Slack)
+├── docker-compose.yml          # Local Jenkins via Docker
+├── Dockerfile.jenkins          # Jenkins + Node + Playwright browsers
+├── playwright.config.ts
+├── tests/smoke/                # Playwright smoke specs
+├── scripts/
+│   ├── generate-summary.mjs    # Plain-language HTML/JSON summary
+│   └── send-slack.mjs          # Slack webhook notification
+└── reports/                    # Generated at build time (gitignored)
+```
+
+---
+
+## CI vs CD (how to explain it)
+
+| Term | In this project |
+|------|-----------------|
+| **CI** | Integrate and validate code on every build: install, lint, test, publish results in Jenkins |
+| **CD** | Deliver report artifacts to a live destination: push to `gh-pages` → GitHub Pages URL |
+
+**Interview line:**
+
+> I built a Jenkins CI/CD pipeline for Playwright test automation. CI runs lint and parallel cross-browser smoke tests. CD deploys HTML and summary reports to GitHub Pages so stakeholders get a live dashboard after each run, with Slack notifications on pass or fail.
+
+---
 
 ## Resume bullet
 
-- Built a Jenkins CI/CD pipeline for a Playwright TypeScript automation suite, running parallel cross-browser tests, publishing HTML/JUnit reports, archiving artifacts, and supporting Slack build notifications.
+- Built a Jenkins **CI/CD** pipeline for a Playwright TypeScript suite: parallel cross-browser smoke tests, JUnit/HTML reporting, **GitHub Pages report deployment**, plain-language summary dashboard, and Slack build notifications.
